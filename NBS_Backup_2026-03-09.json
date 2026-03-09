@@ -1,0 +1,50 @@
+{
+  "trades": [],
+  "firms": [
+    {
+      "name": "5ers ",
+      "color": "#3b82f6",
+      "accountSize": 100000,
+      "profitTarget": 8,
+      "maxDaily": 5,
+      "maxDrawdown": 10,
+      "phase": "Challenge",
+      "isPersonal": false,
+      "id": 1773031268358
+    },
+    {
+      "name": "5ers ",
+      "color": "#3b82f6",
+      "accountSize": 20000,
+      "profitTarget": 0,
+      "maxDaily": 5,
+      "maxDrawdown": 10,
+      "phase": "Live",
+      "isPersonal": false,
+      "id": 1773031324580
+    },
+    {
+      "name": "funded next",
+      "color": "#903bf7",
+      "accountSize": 200000,
+      "profitTarget": 8,
+      "maxDaily": 5,
+      "maxDrawdown": 10,
+      "phase": "Challenge",
+      "isPersonal": false,
+      "id": 1773031369626
+    },
+    {
+      "name": "funding pips ",
+      "color": "#903bf7",
+      "accountSize": 25000,
+      "profitTarget": 0,
+      "maxDaily": 3,
+      "maxDrawdown": 6,
+      "phase": "Live",
+      "isPersonal": false,
+      "id": 1773031415632
+    }
+  ],
+  "savedAt": "2026-03-09T08:31:56.567Z"
+}
