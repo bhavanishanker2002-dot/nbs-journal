@@ -1,0 +1,61 @@
+{
+  "trades": [],
+  "firms": [
+    {
+      "id": 1,
+      "name": "Personal Account",
+      "color": "#c8f135",
+      "accountSize": 10000,
+      "profitTarget": 0,
+      "maxDaily": 0,
+      "maxDrawdown": 0,
+      "phase": "Live",
+      "isPersonal": true
+    },
+    {
+      "id": 3,
+      "name": "5%ers ",
+      "color": "#8b5cf6",
+      "accountSize": 100000,
+      "profitTarget": 10,
+      "maxDaily": 5,
+      "maxDrawdown": 10,
+      "phase": "Challenge",
+      "isPersonal": false
+    },
+    {
+      "id": 5,
+      "name": "5%ers 20k ",
+      "color": "#10b981",
+      "accountSize": 50000,
+      "profitTarget": 0,
+      "maxDaily": 5,
+      "maxDrawdown": 10,
+      "phase": "Live",
+      "isPersonal": false
+    },
+    {
+      "id": 6,
+      "name": "funding pips ",
+      "color": "#ef4444",
+      "accountSize": 25000,
+      "profitTarget": 0,
+      "maxDaily": 3,
+      "maxDrawdown": 6,
+      "phase": "Live",
+      "isPersonal": false
+    },
+    {
+      "name": "funded next",
+      "color": "#7d3bf7",
+      "accountSize": 200000,
+      "profitTarget": 8,
+      "maxDaily": 5,
+      "maxDrawdown": 10,
+      "phase": "Challenge",
+      "isPersonal": false,
+      "id": 1773026480574
+    }
+  ],
+  "savedAt": "2026-03-09T03:40:46.647Z"
+}
