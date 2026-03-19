@@ -46,8 +46,9 @@ var CLOUD={
     if(r.status===404)throw new Error("404 gist not found");
     if(!r.ok)throw new Error("HTTP "+r.status);
     var j=await r.json();
-    var raw=j.files&&j.files["nbs.json"]&&j.files["nbs.json"].content;
-    if(!raw)throw new Error("nbs.json not found");
+    // try both filenames for backwards compatibility with v9/v10 gists
+    var raw=(j.files&&j.files["nbs.json"]&&j.files["nbs.json"].content)||(j.files&&j.files["nbs_data.json"]&&j.files["nbs_data.json"].content);
+    if(!raw)throw new Error("No data file found in gist (tried nbs.json and nbs_data.json)");
     return JSON.parse(raw);
   },
   async write(id,token,data){
@@ -58,12 +59,12 @@ var CLOUD={
 
 // ── CONSTANTS ──
 var DEF_FIRMS=[
-  {id:1,name:"Personal Account",color:"#c8f135",accountSize:10000,profitTarget:0,maxDaily:0,maxDrawdown:0,phase:"Live",isPersonal:true},
-  {id:2,name:"FTMO",color:"#3b82f6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false},
-  {id:3,name:"The Funded Trader",color:"#8b5cf6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false},
-  {id:4,name:"E8 Funding",color:"#f59e0b",accountSize:100000,profitTarget:8,maxDaily:4,maxDrawdown:8,phase:"Challenge",isPersonal:false},
-  {id:5,name:"Apex Trader",color:"#10b981",accountSize:50000,profitTarget:6,maxDaily:3,maxDrawdown:6,phase:"Challenge",isPersonal:false},
-  {id:6,name:"MyFundedFX",color:"#ef4444",accountSize:100000,profitTarget:8,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false}
+  {id:1,name:"Personal Account",color:"#c8f135",accountSize:10000,profitTarget:0,maxDaily:0,maxDrawdown:0,phase:"Live",isPersonal:true,commission:0,swapLong:0,swapShort:0},
+  {id:2,name:"FTMO",color:"#3b82f6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:7,swapLong:-3.5,swapShort:-1.5},
+  {id:3,name:"The Funded Trader",color:"#8b5cf6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:6,swapLong:-3,swapShort:-1},
+  {id:4,name:"E8 Funding",color:"#f59e0b",accountSize:100000,profitTarget:8,maxDaily:4,maxDrawdown:8,phase:"Challenge",isPersonal:false,commission:7,swapLong:-4,swapShort:-2},
+  {id:5,name:"Apex Trader",color:"#10b981",accountSize:50000,profitTarget:6,maxDaily:3,maxDrawdown:6,phase:"Challenge",isPersonal:false,commission:0,swapLong:-2,swapShort:-1},
+  {id:6,name:"MyFundedFX",color:"#ef4444",accountSize:100000,profitTarget:8,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:6,swapLong:-3,swapShort:-1.5}
 ];
 var PAIRS=["EURUSD","USDJPY","GBPUSD","GBPJPY","AUDUSD","USDCAD","XAUUSD","NZDUSD","USDCHF","EURJPY","AUDJPY","CADJPY"];
 var SESSIONS=["Tokyo","London","New York","London/NY Overlap","Asian/London Overlap"];
@@ -261,6 +262,13 @@ function LotCalc(props){
 }
 
 // ── OUTCOME FORM ──
+// helper — current balance for a firm used inside forms (needs trades)
+function currentBalForForm(firm2,trades){
+  if(!firm2||!trades)return firm2?firm2.accountSize:100000;
+  var ft=trades.filter(function(t){return(t.firmIds||[]).includes(firm2.id)});
+  return calcStats(ft,firm2.accountSize,firm2.id).bal;
+}
+
 function OutcomeForm(props){
   var initial=props.initial,trade=props.trade,firm=props.firm,firmId=props.firmId,onSaveOne=props.onSaveOne,onSaveAll=props.onSaveAll,onCancel=props.onCancel,isEdit=props.isEdit;
   var uf_state=useState(Object.assign({},initial));
@@ -268,6 +276,23 @@ function OutcomeForm(props){
   var u=function(k){return function(v){setUf(function(p){return Object.assign({},p,{[k]:v})})}};
   var multi=firmId!=null&&(trade.firmIds||[]).length>1;
   var fc=firm?firm.color:"#888";
+
+  // auto-calc commission and swap when lots or exitTimestamp changes
+  var lots=parseFloat(uf.lots||trade.lots)||0;
+  var comm=firm?(firm.commission||0)*lots:0;
+  var nights=0;
+  if(uf.exitTimestamp&&trade.timestamp){
+    var en=parseDate(trade.timestamp),ex=new Date(uf.exitTimestamp);
+    if(en&&!isNaN(ex))nights=Math.max(0,Math.floor((ex-en)/86400000));
+  }
+  var swapRate=firm?(trade.direction==="BUY"?(firm.swapLong||0):(firm.swapShort||0)):0;
+  var swapCost=swapRate*lots*nights;
+  var totalCost=comm+swapCost;
+  var acctSize=firm?currentBalForForm(firm,props.trades||[]):100000;
+  var grossPnl=parseFloat(uf.actualPct)?acctSize*parseFloat(uf.actualPct)/100:0;
+  var netPnl=grossPnl-totalCost;
+  var netPct=acctSize?netPnl/acctSize*100:0;
+
   return h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
     h("div",{style:{display:"flex",flexDirection:"column",gap:4}},
       h(Chk,{label:"TP hit — held full trade",checked:uf.xc1,onChange:u("xc1")}),
@@ -286,6 +311,28 @@ function OutcomeForm(props){
     h(I,{label:"Exit Date (YYYY-MM-DD)",value:uf.exitTimestamp,onChange:function(e){setUf(function(p){return Object.assign({},p,{exitTimestamp:e.target.value})})},placeholder:"2026-03-10"}),
     h(Photo,{label:"After chart",value:uf.photoAfter,onChange:u("photoAfter")}),
     h(TA,{label:"Post-trade notes",rows:3,value:uf.afterNotes,onChange:function(e){setUf(function(p){return Object.assign({},p,{afterNotes:e.target.value})})},placeholder:"What happened? Lessons?"}),
+    // ── COST BREAKDOWN ──
+    firm&&(firm.commission||firm.swapLong||firm.swapShort)&&lots>0&&h("div",{style:{background:"rgba(0,0,0,.3)",border:"1px solid #1e1e1e",borderRadius:7,padding:11}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:8}},"Cost Breakdown — "+lots+" lots"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}},
+        h("div",{style:{background:"#111",borderRadius:5,padding:"8px 9px",textAlign:"center"}},
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#555",marginBottom:3}},"COMMISSION"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:"bold",color:"#ff4444"}},comm>0?"-$"+comm.toFixed(2):"$0"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},lots+" × $"+(firm.commission||0)+" RT")
+        ),
+        h("div",{style:{background:"#111",borderRadius:5,padding:"8px 9px",textAlign:"center"}},
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#555",marginBottom:3}},"SWAP ("+(nights)+"N)"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:"bold",color:swapCost<=0?"#ff4444":"#34d399"}},swapCost!==0?(swapCost<0?"-$"+Math.abs(swapCost).toFixed(2):"+$"+swapCost.toFixed(2)):"$0"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},lots+" × $"+swapRate+" × "+nights+"d")
+        ),
+        h("div",{style:{background:"#111",borderRadius:5,padding:"8px 9px",textAlign:"center",borderTop:"2px solid "+(netPnl>=0?"#34d399":"#ff4444")+"66"}},
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#555",marginBottom:3}},"NET P&L"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:"bold",color:netPnl>=0?"#34d399":"#ff4444"}},(netPnl>=0?"+$":"-$")+Math.abs(netPnl).toFixed(2)),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},(netPct>=0?"+":"")+netPct.toFixed(2)+"%")
+        )
+      ),
+      totalCost>0&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555",textAlign:"center"}},"Total costs: -$"+totalCost.toFixed(2)+" | Gross: "+(grossPnl>=0?"+$":"-$")+Math.abs(grossPnl).toFixed(2))
+    ),
     multi
       ?h("div",{style:{display:"flex",flexDirection:"column",gap:6}},
           h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#555",letterSpacing:2,textTransform:"uppercase"}},"Save to:"),
@@ -306,7 +353,7 @@ function OutcomeForm(props){
 // firmId=null → global journal, reads/writes root outcome fields
 // firmId=number → account view, reads/writes accountResults[firmId] independently
 function TradeCard(props){
-  var trade=props.trade,onUpdate=props.onUpdate,onDelete=props.onDelete,firms=props.firms,firmId=props.firmId!=null?props.firmId:null;
+  var trade=props.trade,onUpdate=props.onUpdate,onDelete=props.onDelete,firms=props.firms,firmId=props.firmId!=null?props.firmId:null,allTrades=props.allTrades||[];
   var openState=useState(false);var open=openState[0],setOpen=openState[1];
   var editState=useState(false);var editOut=editState[0],setEditOut=editState[1];
   var res=getAccRes(trade,firmId);
@@ -494,13 +541,13 @@ function FirmDetail(props){
   var firm=props.firm,trades=props.trades,firms=props.firms,onBack=props.onBack,onUpdate=props.onUpdate,onDelete=props.onDelete,onUpdateTrade=props.onUpdateTrade,onDeleteTrade=props.onDeleteTrade;
   var tabState=useState("stats");var tab=tabState[0],setTab=tabState[1];
   var editState=useState(false);var editMode=editState[0],setEditMode=editState[1];
-  var efState=useState({name:firm.name,color:firm.color,accountSize:String(firm.accountSize),profitTarget:String(firm.profitTarget),maxDaily:String(firm.maxDaily),maxDrawdown:String(firm.maxDrawdown),phase:firm.phase});var ef=efState[0],setEf=efState[1];
+  var efState=useState({name:firm.name,color:firm.color,accountSize:String(firm.accountSize),profitTarget:String(firm.profitTarget),maxDaily:String(firm.maxDaily),maxDrawdown:String(firm.maxDrawdown),phase:firm.phase,commission:String(firm.commission||0),swapLong:String(firm.swapLong||0),swapShort:String(firm.swapShort||0)});var ef=efState[0],setEf=efState[1];
   var delState=useState(false);var confirmDel=delState[0],setConfirmDel=delState[1];
   var firmTrades=trades.filter(function(t){return(t.firmIds||[]).includes(firm.id)});
   var s=calcStats(firmTrades,firm.accountSize,firm.id);
   var phC={Challenge:"#c8f135",Verification:"#38bdf8",Funded:"#34d399",Passed:"#a78bfa",Failed:"#ff4444",Live:"#34d399"};
   var ph=phC[firm.phase]||"#888";
-  function saveEdit(){onUpdate(firm.id,Object.assign({},ef,{accountSize:parseFloat(ef.accountSize),profitTarget:parseFloat(ef.profitTarget)||0,maxDaily:parseFloat(ef.maxDaily)||0,maxDrawdown:parseFloat(ef.maxDrawdown)||0}));setEditMode(false)}
+  function saveEdit(){onUpdate(firm.id,Object.assign({},ef,{accountSize:parseFloat(ef.accountSize),profitTarget:parseFloat(ef.profitTarget)||0,maxDaily:parseFloat(ef.maxDaily)||0,maxDrawdown:parseFloat(ef.maxDrawdown)||0,commission:parseFloat(ef.commission)||0,swapLong:parseFloat(ef.swapLong)||0,swapShort:parseFloat(ef.swapShort)||0}));setEditMode(false)}
   function dlCSV(){
     var rows=[["Date","Pair","Dir","Entry","SL","TP","Lots","Outcome","PnL%","Exit Why"]];
     firmTrades.forEach(function(t){var r=getAccRes(t,firm.id);rows.push([t.timestamp||"",t.pair||"",t.direction||"",t.entry||"",t.sl||"",t.tp||"",t.lots||"",r.outcome||"",r.actualPct||"",r.exitWhy||""])});
@@ -530,7 +577,10 @@ function FirmDetail(props){
         !firm.isPersonal&&h(I,{label:"Profit Target (%)",value:ef.profitTarget,onChange:function(e){setEf(function(p){return Object.assign({},p,{profitTarget:e.target.value})})}}),
         !firm.isPersonal&&h(I,{label:"Max Daily Loss (%)",value:ef.maxDaily,onChange:function(e){setEf(function(p){return Object.assign({},p,{maxDaily:e.target.value})})}}),
         !firm.isPersonal&&h(I,{label:"Max Drawdown (%)",value:ef.maxDrawdown,onChange:function(e){setEf(function(p){return Object.assign({},p,{maxDrawdown:e.target.value})})}}),
-        h(Se,{label:"Phase",value:ef.phase,onChange:function(v){setEf(function(p){return Object.assign({},p,{phase:v})})},options:PHASES})
+        h(Se,{label:"Phase",value:ef.phase,onChange:function(v){setEf(function(p){return Object.assign({},p,{phase:v})})},options:PHASES}),
+        h(I,{label:"Commission ($/lot RT)",value:ef.commission,onChange:function(e){setEf(function(p){return Object.assign({},p,{commission:e.target.value})})},placeholder:"e.g. 7"}),
+        h(I,{label:"Swap Long ($/lot/night)",value:ef.swapLong,onChange:function(e){setEf(function(p){return Object.assign({},p,{swapLong:e.target.value})})},placeholder:"e.g. -3.5"}),
+        h(I,{label:"Swap Short ($/lot/night)",value:ef.swapShort,onChange:function(e){setEf(function(p){return Object.assign({},p,{swapShort:e.target.value})})},placeholder:"e.g. -1.5"})
       ),
       h("div",{style:{display:"flex",alignItems:"center",gap:10}},h("div",{style:LB},"Color"),h("input",{type:"color",value:ef.color,onChange:function(e){setEf(function(p){return Object.assign({},p,{color:e.target.value})})},style:{width:44,height:32,borderRadius:6}})),
       h("button",{onClick:saveEdit,style:Object.assign({},BS,{background:"rgba(200,241,53,.09)",border:"1px solid rgba(200,241,53,.2)",color:"#c8f135",padding:"11px"})},"Save Changes")
@@ -583,7 +633,7 @@ function FirmDetail(props){
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555",marginBottom:10}},(firmTrades.length+" trades — expand to update · outcome is "),h("span",{style:{color:firm.color}},"independent per account")),
       firmTrades.length===0
         ?h("div",{style:{textAlign:"center",padding:"36px",fontFamily:"'DM Mono',monospace",fontSize:12,color:"#2a2a2a"}},"No trades assigned yet.")
-        :firmTrades.sort(function(a,b){return(parseDate(b.timestamp)||0)-(parseDate(a.timestamp)||0)}).map(function(t){return h(TradeCard,{key:t.id,trade:t,onUpdate:onUpdateTrade,onDelete:onDeleteTrade,firms:firms,firmId:firm.id})})
+        :firmTrades.sort(function(a,b){return(parseDate(b.timestamp)||0)-(parseDate(a.timestamp)||0)}).map(function(t){return h(TradeCard,{key:t.id,trade:t,onUpdate:onUpdateTrade,onDelete:onDeleteTrade,firms:firms,firmId:firm.id,allTrades:trades})})
     )
   );
 }
@@ -594,7 +644,7 @@ function FirmsPage(props){
   var viewState=useState("list");var view=viewState[0],setView=viewState[1];
   var selState=useState(null);var selId=selState[0],setSelId=selState[1];
   var ptState=useState("All");var phaseTab=ptState[0],setPhaseTab=ptState[1];
-  var afState=useState({name:"",color:"#3b82f6",accountSize:"100000",profitTarget:"10",maxDaily:"5",maxDrawdown:"10",phase:"Challenge",isPersonal:false});var af=afState[0],setAf=afState[1];
+  var afState=useState({name:"",color:"#3b82f6",accountSize:"100000",profitTarget:"10",maxDaily:"5",maxDrawdown:"10",phase:"Challenge",isPersonal:false,commission:"7",swapLong:"-3.5",swapShort:"-1.5"});var af=afState[0],setAf=afState[1];
   if(view==="detail"&&selId){var firm2=firms.find(function(f){return f.id===selId});if(firm2)return h(FirmDetail,{firm:firm2,trades:trades,firms:firms,onBack:function(){setView("list")},onUpdate:function(id,d){onUpdate(id,d)},onDelete:function(id){onDelete(id);setView("list")},onUpdateTrade:onUpdateTrade,onDeleteTrade:onDeleteTrade})}
   if(view==="add")return h("div",{className:"fade"},
     h("button",{onClick:function(){setView("list")},style:Object.assign({},BS,{background:"none",border:"1px solid #222",color:"#555",marginBottom:16,padding:"7px 12px"})},"← Back"),
@@ -606,10 +656,13 @@ function FirmsPage(props){
         h(Se,{label:"Phase",value:af.phase,onChange:function(v){setAf(function(p){return Object.assign({},p,{phase:v})})},options:PHASES}),
         !af.isPersonal&&h(I,{label:"Profit Target (%)",value:af.profitTarget,onChange:function(e){setAf(function(p){return Object.assign({},p,{profitTarget:e.target.value})})}}),
         !af.isPersonal&&h(I,{label:"Max Daily Loss (%)",value:af.maxDaily,onChange:function(e){setAf(function(p){return Object.assign({},p,{maxDaily:e.target.value})})}}),
-        !af.isPersonal&&h(I,{label:"Max Drawdown (%)",value:af.maxDrawdown,onChange:function(e){setAf(function(p){return Object.assign({},p,{maxDrawdown:e.target.value})})}})
+        !af.isPersonal&&h(I,{label:"Max Drawdown (%)",value:af.maxDrawdown,onChange:function(e){setAf(function(p){return Object.assign({},p,{maxDrawdown:e.target.value})})}}),
+        h(I,{label:"Commission ($/lot RT)",value:af.commission,onChange:function(e){setAf(function(p){return Object.assign({},p,{commission:e.target.value})})},placeholder:"e.g. 7"}),
+        h(I,{label:"Swap Long ($/lot/night)",value:af.swapLong,onChange:function(e){setAf(function(p){return Object.assign({},p,{swapLong:e.target.value})})},placeholder:"e.g. -3.5"}),
+        h(I,{label:"Swap Short ($/lot/night)",value:af.swapShort,onChange:function(e){setAf(function(p){return Object.assign({},p,{swapShort:e.target.value})})},placeholder:"e.g. -1.5"})
       ),
       h("div",{style:{display:"flex",alignItems:"center",gap:10}},h("div",{style:LB},"Color"),h("input",{type:"color",value:af.color,onChange:function(e){setAf(function(p){return Object.assign({},p,{color:e.target.value})})},style:{width:44,height:32,borderRadius:6}})),
-      h("button",{onClick:function(){if(!af.name)return;onAdd(Object.assign({},af,{accountSize:parseFloat(af.accountSize),profitTarget:parseFloat(af.profitTarget)||0,maxDaily:parseFloat(af.maxDaily)||0,maxDrawdown:parseFloat(af.maxDrawdown)||0,id:Date.now()}));setView("list")},style:Object.assign({},BS,{background:"rgba(200,241,53,.09)",border:"1px solid rgba(200,241,53,.2)",color:"#c8f135",padding:"12px"})},"Add Account")
+      h("button",{onClick:function(){if(!af.name)return;onAdd(Object.assign({},af,{accountSize:parseFloat(af.accountSize),profitTarget:parseFloat(af.profitTarget)||0,maxDaily:parseFloat(af.maxDaily)||0,maxDrawdown:parseFloat(af.maxDrawdown)||0,commission:parseFloat(af.commission)||0,swapLong:parseFloat(af.swapLong)||0,swapShort:parseFloat(af.swapShort)||0,id:Date.now()}));setView("list")},style:Object.assign({},BS,{background:"rgba(200,241,53,.09)",border:"1px solid rgba(200,241,53,.2)",color:"#c8f135",padding:"12px"})},"Add Account")
     )
   );
   var phC2={Personal:"#c8f135",Challenge:"#c8f135",Verification:"#38bdf8",Funded:"#34d399",Passed:"#a78bfa",Failed:"#ff4444",Live:"#34d399",All:"#888"};
@@ -651,15 +704,27 @@ function FirmsPage(props){
 
 // ── NEW TRADE FORM ──
 function NewTradeForm(props){
-  var onSave=props.onSave,onCancel=props.onCancel,firms=props.firms;
+  var onSave=props.onSave,onCancel=props.onCancel,firms=props.firms,trades=props.trades||[];
   var blank={pair:"",direction:"",session:"",marketRegime:"",entry:"",sl:"",tp:"",lots:"",riskPct:"1",accountSize:"100000",firmIds:[],c1:false,c2:false,c3:false,c4:false,c5:false,c6:false,c7:false,c8:false,newsPresent:"no",newsType:"",newsAction:"",beforeNotes:"",photoBefore:""};
   var fState=useState(blank);var f=fState[0],setF=fState[1];
   var sv=function(k){return function(v){setF(function(p){return Object.assign({},p,{[k]:v})})}};
   var se=function(k){return function(e){setF(function(p){return Object.assign({},p,{[k]:e.target.value})})}};
   var rr=calcRR(f.entry,f.sl,f.tp,f.direction);
   var score=scoreEntry(f);
-  useEffect(function(){var l=calcLots(f.pair,f.entry,f.sl,f.riskPct,f.accountSize||100000);if(l)setF(function(p){return Object.assign({},p,{lots:String(l)})})},[f.pair,f.entry,f.sl,f.riskPct,f.accountSize]);
-  function selectFirm(firmId){var firm2=firms.find(function(x){return String(x.id)===firmId});if(!firm2)return;setF(function(p){return Object.assign({},p,{accountSize:String(firm2.accountSize),firmIds:p.firmIds.includes(firm2.id)?p.firmIds:[].concat(p.firmIds,[firm2.id])})})}
+  // auto-lot: if accounts assigned use first assigned account's current balance, else use manual accountSize
+  useEffect(function(){
+    var bal=f.firmIds.length>0
+      ?(function(){var firm2=firms.find(function(x){return x.id===f.firmIds[0]});return firm2?currentBal(firm2):parseFloat(f.accountSize)||100000})()
+      :parseFloat(f.accountSize)||100000;
+    var l=calcLots(f.pair,f.entry,f.sl,f.riskPct,bal);
+    if(l)setF(function(p){return Object.assign({},p,{lots:String(l)})});
+  },[f.pair,f.entry,f.sl,f.riskPct,f.accountSize,f.firmIds]);
+  // compute current balance per firm (starting size + all closed PnL)
+  function currentBal(firm2){
+    var ft=trades.filter(function(t){return(t.firmIds||[]).includes(firm2.id)});
+    return calcStats(ft,firm2.accountSize,firm2.id).bal;
+  }
+  function selectFirm(firmId){var firm2=firms.find(function(x){return String(x.id)===firmId});if(!firm2)return;var bal=currentBal(firm2);setF(function(p){return Object.assign({},p,{accountSize:String(Math.round(bal*100)/100),firmIds:p.firmIds.includes(firm2.id)?p.firmIds:[].concat(p.firmIds,[firm2.id])})})}
   function toggleFirm(id){setF(function(p){return Object.assign({},p,{firmIds:p.firmIds.includes(id)?p.firmIds.filter(function(x){return x!==id}):[].concat(p.firmIds,[id])})})}
   function handleSave(){if(!f.pair||!f.direction||!f.entry||!f.sl){alert("Fill pair, direction, entry and SL.");return}if(score<5&&!window.confirm("Score "+score+"/8 — below rules. Log anyway?"))return;onSave(Object.assign({},f,{rr:rr,id:Date.now(),timestamp:nowTs(),accountResults:{}}))}
   var C={lime:"#c8f135",sky:"#38bdf8",emerald:"#34d399",amber:"#f0a500",violet:"#a78bfa"};
@@ -686,10 +751,15 @@ function NewTradeForm(props){
         h(I,{label:"Lots (auto)",value:f.lots,onChange:se("lots")})
       ),
       h(F,{label:"Account for lot calc"},
-        h("select",{onChange:function(e){selectFirm(e.target.value)},style:Object.assign({},IS,{appearance:"none",color:"#888"}),defaultValue:""},h("option",{value:""},"Pick account to set size..."),firms.map(function(firm2){return h("option",{key:firm2.id,value:String(firm2.id)},firm2.name+" — $"+Number(firm2.accountSize).toLocaleString()+" ("+firm2.phase+")")})),
+        h("select",{onChange:function(e){selectFirm(e.target.value)},style:Object.assign({},IS,{appearance:"none",color:"#888"}),defaultValue:""},h("option",{value:""},"Pick account to set size..."),        firms.map(function(firm2){var bal=currentBal(firm2);return h("option",{key:firm2.id,value:String(firm2.id)},firm2.name+" — $"+bal.toLocaleString(undefined,{maximumFractionDigits:2})+" current ("+firm2.phase+")")})),
         h("input",{value:f.accountSize,onChange:se("accountSize"),placeholder:"Or type custom e.g. 50000",style:Object.assign({},IS,{fontSize:12,marginTop:5})})
       ),
-      h(LotCalc,{pair:f.pair,entry:f.entry,sl:f.sl,riskPct:f.riskPct,firmIds:f.firmIds,firms:firms})
+      h(LotCalc,{pair:f.pair,entry:f.entry,sl:f.sl,riskPct:f.riskPct,firmIds:f.firmIds,
+        firms:firms.map(function(firm2){
+          // always use live current balance, not stored starting size
+          return Object.assign({},firm2,{accountSize:currentBal(firm2)});
+        })
+      })
     ),
     h("div",{style:{borderLeft:"2px solid "+C.violet,paddingLeft:12,display:"flex",flexDirection:"column",gap:8}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:C.violet,textTransform:"uppercase"}},"03 — Before"),
@@ -951,7 +1021,7 @@ function App(){
       syncMsg&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:syncColor,letterSpacing:1,textAlign:"center",padding:"2px 0 4px",borderTop:"1px solid #0e0e0e"}},syncMsg)
     ),
     h("div",{style:{maxWidth:720,margin:"0 auto",padding:"15px 13px"}},
-      page==="new"&&h(NewTradeForm,{onSave:function(t){addTrade(t);setPage("journal")},onCancel:function(){setPage("journal")},firms:firms}),
+      page==="new"&&h(NewTradeForm,{onSave:function(t){addTrade(t);setPage("journal")},onCancel:function(){setPage("journal")},firms:firms,trades:trades}),
       page==="journal"&&h("div",{className:"fade"},
         h(StatsBar,{trades:trades}),
         h("div",{style:{display:"flex",gap:4,marginBottom:11,flexWrap:"wrap"}},
@@ -959,7 +1029,7 @@ function App(){
         ),
         filtered.length===0
           ?h("div",{style:{textAlign:"center",padding:"60px 0",fontFamily:"'DM Mono',monospace",fontSize:12,color:"#222"}},trades.length===0?"No trades yet — tap + Trade":"No trades match filter")
-          :filtered.map(function(t){return h(TradeCard,{key:t.id,trade:t,onUpdate:updateTrade,onDelete:deleteTrade,firms:firms,firmId:null})})
+          :filtered.map(function(t){return h(TradeCard,{key:t.id,trade:t,onUpdate:updateTrade,onDelete:deleteTrade,firms:firms,firmId:null,allTrades:trades})})
       ),
       page==="calendar"&&h("div",{className:"fade"},h(CalendarView,{trades:trades})),
       page==="firms"&&h(FirmsPage,{firms:firms,trades:trades,onUpdate:updateFirm,onDelete:deleteFirm,onAdd:addFirm,onReorder:function(arr){setFirms(arr)},onUpdateTrade:updateTrade,onDeleteTrade:deleteTrade}),
